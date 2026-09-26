@@ -39,12 +39,34 @@ export function isDepthInverted(stratum: Pick<Stratum, 'topDepth' | 'bottomDepth
   return stratum.topDepth > stratum.bottomDepth
 }
 
+/** 同一探方内占用该单位号的在册单位（无冲突返回 null） */
+export function findCodeConflict(strata: Stratum[], candidate: Pick<Stratum, 'id' | 'trenchId' | 'code'>): Stratum | null {
+  return (
+    strata.find(
+      (item) =>
+        item.id !== candidate.id &&
+        item.trenchId === candidate.trenchId &&
+        item.code.trim().toUpperCase() === candidate.code.trim().toUpperCase()
+    ) ?? null
+  )
+}
+
 /** 单位号在同一探方内是否重复 */
 export function isCodeDuplicated(strata: Stratum[], candidate: Pick<Stratum, 'id' | 'trenchId' | 'code'>): boolean {
-  return strata.some(
-    (item) =>
-      item.id !== candidate.id &&
-      item.trenchId === candidate.trenchId &&
-      item.code.trim().toUpperCase() === candidate.code.trim().toUpperCase()
-  )
+  return findCodeConflict(strata, candidate) !== null
+}
+
+/** 暂存区条目：误删地层单位的整条快照，向工地核对后可放回原探方 */
+export interface StratumTrashEntry {
+  id: string
+  /** 删除时的整条快照（开口层位、土质土色、绘图号等原样保留） */
+  snapshot: Stratum
+  /** 删除发生时间（ISO 字符串） */
+  deletedAt: string
+  /** 原所属探方 id */
+  trenchId: string
+  /** 原所属探方显示名快照（探方后续变动仍可追溯） */
+  trenchLabel: string
+  /** 恢复原因：删除时填写的暂存缘由 */
+  reason: string
 }

@@ -1,13 +1,12 @@
 import { createStore } from 'zustand/vanilla'
 import type { Stratum, UnitType } from '@/types'
-import { db, syncAll, syncDelete, syncPut } from '@/hooks/usePersistentStore'
+import { db, syncAll, syncPut } from '@/hooks/usePersistentStore'
 
 export interface StratumState {
   strata: Stratum[]
   loaded: boolean
   hydrate: () => Promise<void>
   save: (stratum: Stratum) => Promise<void>
-  remove: (id: string) => Promise<void>
   bulkSetType: (ids: string[], type: UnitType) => Promise<void>
 }
 
@@ -21,10 +20,6 @@ export const stratumStore = createStore<StratumState>((set, get) => ({
   },
   save: async (stratum) => {
     await syncPut<Stratum>(db.strata, stratum)
-    await get().hydrate()
-  },
-  remove: async (id) => {
-    await syncDelete<Stratum>(db.strata, id)
     await get().hydrate()
   },
   bulkSetType: async (ids, type) => {

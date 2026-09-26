@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useStore } from '@/hooks/usePersistentStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { stratumStore } from '@/stores/stratumStore'
+import { stratumTrashStore } from '@/stores/stratumTrashStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { relationStore } from '@/stores/relationStore'
 
@@ -33,6 +34,7 @@ const stats = computed(() => [
 onMounted(async () => {
   await trenchStore.getState().hydrate()
   await stratumStore.getState().hydrate()
+  await stratumTrashStore.getState().hydrate()
   await artifactStore.getState().hydrate()
   await relationStore.getState().hydrate()
 })

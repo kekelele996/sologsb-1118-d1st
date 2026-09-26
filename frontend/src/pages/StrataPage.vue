@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { Inclusion, Stratum, UnitType } from '@/types'
+import type { Inclusion, Stratum, StratumTrashEntry, UnitType } from '@/types'
 import { INCLUSIONS, UNIT_TYPES, isCodeDuplicated, isDepthInverted, stratumThickness } from '@/types'
 import StratumDepthBar from '@/components/common/StratumDepthBar.vue'
 import TrenchTag from '@/components/common/TrenchTag.vue'
 import { useStore } from '@/hooks/usePersistentStore'
 import { useStratumOrder } from '@/hooks/useStratumOrder'
 import { stratumStore } from '@/stores/stratumStore'
+import { stratumTrashStore } from '@/stores/stratumTrashStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { relationStore } from '@/stores/relationStore'
@@ -15,6 +16,7 @@ import { uid } from '@/utils/id'
 
 const trenchState = useStore(trenchStore)
 const stratumState = useStore(stratumStore)
+const trashState = useStore(stratumTrashStore)
 const artifactState = useStore(artifactStore)
 const relationState = useStore(relationStore)
 
@@ -180,9 +182,48 @@ async function remove(stratum: Stratum): Promise<void> {
     ElMessage.error(`「${stratum.code}」下仍有 ${count} 件出土物、${relations} 条层位关系，请先清理`)
     return
   }
-  await ElMessageBox.confirm(`确认删除地层单位「${stratum.code}」？`, '删除确认', { type: 'warning' })
-  await stratumStore.getState().remove(stratum.id)
-  ElMessage.success('地层单位已删除')
+  const { value } = await ElMessageBox.prompt(
+    `确认删除地层单位「${stratum.code}」？整条快照（开口层位、土质土色、绘图号等）将移入暂存区，向工地核对后可放回。`,
+    '移入暂存区',
+    {
+      type: 'warning',
+      confirmButtonText: '移入暂存区',
+      cancelButtonText: '取消',
+      inputPlaceholder: '恢复原因，如：整理时误删，待向工地核对',
+      inputValue: '整理时误删，待向工地核对开口层位与绘图号'
+    }
+  )
+  await stratumTrashStore.getState().trash(stratum, String(value ?? ''))
+  ElMessage.success(`「${stratum.code}」已移入暂存区，编目表、探方统计与层位关系不再显示该单位`)
+}
+
+/** 放回暂存条目：仅在原探方单位号仍空闲时成功 */
+async function restore(entry: StratumTrashEntry): Promise<void> {
+  const result = await stratumTrashStore.getState().restore(entry.id)
+  if (result.ok) {
+    ElMessage.success(`「${entry.snapshot.code}」已放回 ${entry.trenchLabel}，编目表、探方统计与层位关系同步恢复`)
+    return
+  }
+  if (result.reason === 'code-conflict') {
+    ElMessage.error(
+      `无法放回：单位号「${entry.snapshot.code}」在 ${entry.trenchLabel} 已被在册单位「${result.conflict.code}」（${result.conflict.type}）占用，条目保留在暂存区`
+    )
+    return
+  }
+  ElMessage.error(`无法放回：原探方 ${entry.trenchLabel} 已不存在，条目保留在暂存区`)
+}
+
+async function drop(entry: StratumTrashEntry): Promise<void> {
+  await ElMessageBox.confirm(`彻底删除暂存条目「${entry.snapshot.code}」？删除后快照无法找回。`, '彻底删除确认', {
+    type: 'warning'
+  })
+  await stratumTrashStore.getState().drop(entry.id)
+  ElMessage.success('暂存条目已彻底删除')
+}
+
+function formatTime(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('zh-CN', { hour12: false })
 }
 
 async function applyBatchType(): Promise<void> {
@@ -201,7 +242,7 @@ async function applyBatchType(): Promise<void> {
       <div>
         <h2 class="page-title">地层单位编目表</h2>
         <p class="page-sub">
-          按类型与深度区间筛选；层序倒置（上界大于下界）与同一探方内单位号重复即时高亮提示，深度刻度条展示厚度。
+          按类型与深度区间筛选；层序倒置（上界大于下界）与同一探方内单位号重复即时高亮提示，深度刻度条展示厚度。误删的单位先进入暂存区，核对后可放回。
         </p>
       </div>
       <el-button type="primary" @click="openCreate">
@@ -315,6 +356,50 @@ async function applyBatchType(): Promise<void> {
       </el-table-column>
     </el-table>
 
+    <el-card v-if="trashState.entries.length > 0" shadow="never" class="trash-card">
+      <template #header>
+        <div class="trash-head">
+          <span>误删暂存区（{{ trashState.entries.length }}）</span>
+          <span class="muted">整条快照已保留；仅在原探方单位号仍空闲时才能放回，编号被占用则留在暂存区</span>
+        </div>
+      </template>
+      <el-table :data="trashState.entries" border stripe row-key="id" size="small">
+        <el-table-column label="单位号" width="100">
+          <template #default="{ row }: { row: StratumTrashEntry }">
+            <span class="mono">{{ row.snapshot.code }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="类型" width="90">
+          <template #default="{ row }: { row: StratumTrashEntry }">
+            <TrenchTag :unit-type="row.snapshot.type" size="small" />
+          </template>
+        </el-table-column>
+        <el-table-column label="所属探方" width="140">
+          <template #default="{ row }: { row: StratumTrashEntry }">
+            <span class="mono">{{ row.trenchLabel }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="发生时间" width="165">
+          <template #default="{ row }: { row: StratumTrashEntry }">{{ formatTime(row.deletedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="快照摘要" min-width="280" show-overflow-tooltip>
+          <template #default="{ row }: { row: StratumTrashEntry }">
+            开口 {{ row.snapshot.openLayer || '—' }} · {{ row.snapshot.topDepth }}–{{ row.snapshot.bottomDepth }} m ·
+            {{ row.snapshot.soil || '—' }} · 绘图号 {{ row.snapshot.drawingNo || '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="恢复原因" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }: { row: StratumTrashEntry }">{{ row.reason }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }: { row: StratumTrashEntry }">
+            <el-button link type="primary" size="small" @click="restore(row)">放回</el-button>
+            <el-button link type="danger" size="small" @click="drop(row)">彻底删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑地层单位' : '新建地层单位'" width="680px">
       <el-form label-width="110px">
         <el-row :gutter="12">
@@ -398,6 +483,17 @@ async function applyBatchType(): Promise<void> {
 <style scoped>
 .alert {
   margin-bottom: 14px;
+}
+.trash-card {
+  margin-top: 16px;
+  border-radius: 12px;
+}
+.trash-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .depth {
   display: flex;
