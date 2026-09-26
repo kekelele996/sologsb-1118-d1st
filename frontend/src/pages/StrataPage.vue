@@ -8,13 +8,16 @@ import TrenchTag from '@/components/common/TrenchTag.vue'
 import { useStore } from '@/hooks/usePersistentStore'
 import { useStratumOrder } from '@/hooks/useStratumOrder'
 import { stratumStore } from '@/stores/stratumStore'
+import { stratumTrashStore } from '@/stores/stratumTrashStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { relationStore } from '@/stores/relationStore'
 import { uid } from '@/utils/id'
+import { formatDateTime } from '@/utils/time'
 
 const trenchState = useStore(trenchStore)
 const stratumState = useStore(stratumStore)
+const trashState = useStore(stratumTrashStore)
 const artifactState = useStore(artifactStore)
 const relationState = useStore(relationStore)
 
@@ -32,6 +35,7 @@ const batchType = ref<UnitType>('地层')
 
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
+const trashDrawerVisible = ref(false)
 
 const form = reactive({
   trenchId: '',
@@ -173,16 +177,72 @@ async function submit(): Promise<void> {
 
 async function remove(stratum: Stratum): Promise<void> {
   const count = artifactState.artifacts.filter((item) => item.stratumId === stratum.id).length
-  const relations = relationState.relations.filter(
-    (item) => item.unitAId === stratum.id || item.unitBId === stratum.id
-  ).length
-  if (count > 0 || relations > 0) {
-    ElMessage.error(`「${stratum.code}」下仍有 ${count} 件出土物、${relations} 条层位关系，请先清理`)
+  if (count > 0) {
+    ElMessage.error(`「${stratum.code}」下仍有 ${count} 件出土物，请先清理出土物再移入暂存区`)
     return
   }
-  await ElMessageBox.confirm(`确认删除地层单位「${stratum.code}」？`, '删除确认', { type: 'warning' })
-  await stratumStore.getState().remove(stratum.id)
-  ElMessage.success('地层单位已删除')
+  let reason = ''
+  try {
+    const result = await ElMessageBox.prompt(
+      `地层单位「${stratum.code}」将移出编目表并进入可恢复的误删暂存区，其开口层位、土质描述、绘图号等会整条保存；编目表、探方统计与层位关系将暂时不再显示它。请填写恢复原因（向工地核对后可放回）。`,
+      '误删暂存',
+      {
+        type: 'warning',
+        confirmButtonText: '移入暂存区',
+        cancelButtonText: '取消',
+        inputValue: '整理时误删',
+        inputPlaceholder: '如：整理时误删，开口层位与绘图号待向工地核对',
+        inputValidator: (value: string) => value.trim().length > 0 || '请填写恢复原因'
+      }
+    )
+    reason = result.value
+  } catch {
+    return
+  }
+  const trench = trenchState.trenches.find((item) => item.id === stratum.trenchId)
+  await stratumTrashStore.getState().moveToTrash(stratum, reason, trench)
+  // 该单位暂离在册口径后，层位关系需一起隐藏
+  await relationStore.getState().hydrate()
+  ElMessage.success(`「${stratum.code}」已进入误删暂存区，可在编目表右上角的暂存区放回`)
+}
+
+async function openTrash(): Promise<void> {
+  await stratumTrashStore.getState().hydrate()
+  trashDrawerVisible.value = true
+}
+
+async function restoreTrashItem(itemId: string): Promise<void> {
+  const result = await stratumTrashStore.getState().restore(itemId)
+  if (result.ok) {
+    // 回到在册口径后，编目表 / 探方统计 / 层位关系一起回来
+    await Promise.all([stratumStore.getState().hydrate(), relationStore.getState().hydrate()])
+    ElMessage.success(`「${result.stratum.code}」已放回原探方，编目表、探方统计与层位关系一并恢复`)
+    return
+  }
+  if (result.reason === 'trench-missing') {
+    ElMessage.error(`无法放回：原探方「${result.trenchLabel}」已不存在，该单位继续留在暂存区`)
+    return
+  }
+  ElMessage.error(
+    `无法放回：原单位号「${result.occupiedBy.code}」在同探方已被在册单位占用（类型：${result.occupiedBy.type}），该单位继续留在暂存区，请先核对编号`
+  )
+}
+
+async function purgeTrashItem(itemId: string): Promise<void> {
+  const item = trashState.items.find((entry) => entry.id === itemId)
+  if (!item) return
+  try {
+    await ElMessageBox.confirm(
+      `确认彻底放弃「${item.stratum.code}」？将永久删除该单位快照及其全部相关层位关系，操作不可恢复。`,
+      '彻底删除确认',
+      { type: 'warning', confirmButtonText: '彻底删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  await stratumTrashStore.getState().purge(itemId)
+  await relationStore.getState().hydrate()
+  ElMessage.success(`「${item.stratum.code}」已彻底删除`)
 }
 
 async function applyBatchType(): Promise<void> {
@@ -204,9 +264,16 @@ async function applyBatchType(): Promise<void> {
           按类型与深度区间筛选；层序倒置（上界大于下界）与同一探方内单位号重复即时高亮提示，深度刻度条展示厚度。
         </p>
       </div>
-      <el-button type="primary" @click="openCreate">
-        <el-icon><Plus /></el-icon>新建地层单位
-      </el-button>
+      <div class="head-actions">
+        <el-badge :value="trashState.items.length" :hidden="trashState.items.length === 0" type="warning">
+          <el-button @click="openTrash">
+            <el-icon><Delete /></el-icon>误删暂存区
+          </el-button>
+        </el-badge>
+        <el-button type="primary" @click="openCreate">
+          <el-icon><Plus /></el-icon>新建地层单位
+        </el-button>
+      </div>
     </div>
 
     <el-alert
@@ -392,12 +459,56 @@ async function applyBatchType(): Promise<void> {
         <el-button type="primary" @click="submit">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer v-model="trashDrawerVisible" :title="`误删暂存区（${trashState.items.length}）`" size="560px">
+      <div class="trash-wrap">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="暂存区保存误删单位的整条快照（含开口层位、土质描述、绘图号）"
+          description="放回时只在原探方的原单位号仍空闲时成功；编号已被占用或原探方已删时，单位继续留在暂存区。在册的编目表、探方统计与层位关系均不显示暂存单位，恢复后一并回来。"
+          class="trash-alert"
+        />
+        <el-empty v-if="trashState.items.length === 0" description="暂存区为空，没有待恢复的地层单位" />
+        <el-card v-for="item in trashState.items" :key="item.id" shadow="hover" class="trash-card">
+          <div class="trash-card-head">
+            <div>
+              <span class="mono trash-code">{{ item.stratum.code }}</span>
+              <el-tag size="small" effect="plain" class="mini">{{ item.stratum.type }}</el-tag>
+            </div>
+            <span class="muted">{{ formatDateTime(item.deletedAt) }}</span>
+          </div>
+          <el-descriptions :column="1" size="small" border>
+            <el-descriptions-item label="发生时间">{{ formatDateTime(item.deletedAt) }}</el-descriptions-item>
+            <el-descriptions-item label="所属探方">{{ item.trenchLabel }}</el-descriptions-item>
+            <el-descriptions-item label="恢复原因">{{ item.reason }}</el-descriptions-item>
+            <el-descriptions-item label="开口层位">{{ item.stratum.openLayer || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="深度区间">{{ item.stratum.topDepth }} – {{ item.stratum.bottomDepth }} m</el-descriptions-item>
+            <el-descriptions-item label="土质土色">{{ item.stratum.soil || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="包含物">
+              <el-tag v-for="inc in item.stratum.inclusions" :key="inc" size="small" effect="plain" class="mini">{{ inc }}</el-tag>
+              <span v-if="item.stratum.inclusions.length === 0" class="muted">—</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="绘图/拍照号">{{ item.stratum.drawingNo || '—' }}</el-descriptions-item>
+          </el-descriptions>
+          <div class="trash-ops">
+            <el-button type="primary" size="small" @click="restoreTrashItem(item.id)">放回原探方</el-button>
+            <el-button type="danger" plain size="small" @click="purgeTrashItem(item.id)">彻底删除</el-button>
+          </div>
+        </el-card>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <style scoped>
 .alert {
   margin-bottom: 14px;
+}
+.head-actions {
+  display: flex;
+  gap: 10px;
 }
 .depth {
   display: flex;
@@ -411,5 +522,36 @@ async function applyBatchType(): Promise<void> {
   margin: 0;
   color: #c0392b;
   font-size: 12px;
+}
+.trash-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px 20px;
+}
+.trash-alert {
+  margin-bottom: 4px;
+}
+.trash-card {
+  border-radius: 10px;
+}
+.trash-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.trash-code {
+  font-size: 15px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.trash-ops {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
 }
 </style>

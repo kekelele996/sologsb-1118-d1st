@@ -16,7 +16,13 @@ export const relationStore = createStore<RelationState>((set, get) => ({
   relations: [],
   loaded: false,
   hydrate: async () => {
-    const relations = await syncAll<Relation>(db.relations)
+    // 只保留两端单位仍在册的关系：暂存中的地层单位不参与层位关系显示，恢复后自动回来
+    const [all, activeIds] = await Promise.all([
+      syncAll<Relation>(db.relations),
+      db.strata.toCollection().primaryKeys()
+    ])
+    const activeSet = new Set(activeIds)
+    const relations = all.filter((item) => activeSet.has(item.unitAId) && activeSet.has(item.unitBId))
     relations.sort((a, b) => a.id.localeCompare(b.id))
     set({ relations, loaded: true })
   },

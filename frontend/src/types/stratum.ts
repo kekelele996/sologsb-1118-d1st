@@ -48,3 +48,18 @@ export function isCodeDuplicated(strata: Stratum[], candidate: Pick<Stratum, 'id
       item.code.trim().toUpperCase() === candidate.code.trim().toUpperCase()
   )
 }
+
+/** 误删暂存区条目：整条地层单位快照 + 暂存元信息 */
+export interface StratumTrashItem {
+  id: string
+  /** 被删地层单位的整条快照（含开口层位、土质描述、绘图号等全部字段） */
+  stratum: Stratum
+  /** 进入暂存区的时间（ISO 字符串） */
+  deletedAt: string
+  /** 原所属探方 ID（冗余保存，探方日后被删时仍可核对） */
+  trenchId: string
+  /** 原所属探方显示名快照，如「Ⅱ区 · T0501」 */
+  trenchLabel: string
+  /** 恢复原因（移入暂存区时填写，如 整理时误删） */
+  reason: string
+}

@@ -4,12 +4,14 @@ import { useRoute } from 'vue-router'
 import { useStore } from '@/hooks/usePersistentStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { stratumStore } from '@/stores/stratumStore'
+import { stratumTrashStore } from '@/stores/stratumTrashStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { relationStore } from '@/stores/relationStore'
 
 const route = useRoute()
 const trenchState = useStore(trenchStore)
 const stratumState = useStore(stratumStore)
+const trashState = useStore(stratumTrashStore)
 const artifactState = useStore(artifactStore)
 const relationState = useStore(relationStore)
 
@@ -33,6 +35,7 @@ const stats = computed(() => [
 onMounted(async () => {
   await trenchStore.getState().hydrate()
   await stratumStore.getState().hydrate()
+  await stratumTrashStore.getState().hydrate()
   await artifactStore.getState().hydrate()
   await relationStore.getState().hydrate()
 })
@@ -58,6 +61,10 @@ onMounted(async () => {
         <div v-for="item in stats" :key="item.label" class="stat-row">
           <span>{{ item.label }}</span>
           <b>{{ item.value }}</b>
+        </div>
+        <div v-if="trashState.items.length > 0" class="stat-row trash-row">
+          <span>误删暂存（待恢复）</span>
+          <b>{{ trashState.items.length }}</b>
         </div>
         <p class="stat-tip">数据保存在浏览器 IndexedDB，无需后端服务</p>
       </div>
@@ -144,6 +151,12 @@ onMounted(async () => {
   margin: 8px 0 0;
   color: #bfae95;
   line-height: 1.6;
+}
+.trash-row {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.18);
+  color: #e8c88e;
 }
 .header {
   display: flex;

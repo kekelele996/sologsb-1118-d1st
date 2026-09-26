@@ -8,6 +8,7 @@ import router from '@/router'
 import { seedDemoData, stampDbVersion } from '@/hooks/usePersistentStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { stratumStore } from '@/stores/stratumStore'
+import { stratumTrashStore } from '@/stores/stratumTrashStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { relationStore } from '@/stores/relationStore'
 import '@/styles/main.css'
@@ -17,6 +18,7 @@ async function bootstrap(): Promise<void> {
   await stampDbVersion()
   await trenchStore.getState().hydrate()
   await stratumStore.getState().hydrate()
+  await stratumTrashStore.getState().hydrate()
   await artifactStore.getState().hydrate()
   await relationStore.getState().hydrate()
 }
